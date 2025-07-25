@@ -8,15 +8,7 @@ import os
 llm = LLM(
     model='gpt-4o',
     api_key=key,
-    base_url = alfa_base_url
 )
-
-input_data = {
-        'topic': {
-            'company name': 'Garten Wellbeing, PBC',
-            'product description': "NATURE'S BAKERY FIG/BLUEB 12ct,"
-        }
-    }
 
 
 historical_taxcode_agent = Agent(
