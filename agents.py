@@ -2,65 +2,179 @@ from crewai import Agent, LLM
 from crewai import Task, Crew
 import json
 import os
-#import openai
+import pandas as pd
+import numpy as np
+from duckduckgo_search import DDGS
 
+def load_data():
+    company_names_DF = pd.read_excel('/Users/anand.srinivasan/Downloads/company_driven_modeling/company.xlsx')
+    mm_DF = pd.read_csv('/Users/anand.srinivasan/Downloads/company_driven_modeling/model_mm_intput.csv')
+    mm_DF = mm_DF.reset_index()
+    ims_DF = pd.read_csv('/Users/anand.srinivasan/Downloads/company_driven_modeling/ims_model_input_data.csv')
+    products_DF = pd.concat([mm_DF,ims_DF],axis=0)
+    return company_names_DF,products_DF
 
-llm = LLM(
-    model='gpt-4o',
-    api_key=key,
-)
+def load_llm(model):
+    # Setup of the ALFA client parameters
+    alfa_claim = "1a7f2329-7fb8-45a8-9c8b-d821b50c5888"
+    alfa_env = "qa"
+    alfa_base_url = f"https://alfa.gamma.{alfa_env}.us-west-2.aws.avalara.io"
+    key = f"sk-{alfa_claim}"  
 
+    os.environ["OPENAI_API_KEY"] = key
+    os.environ["OPENAI_BASE_URL"] = alfa_base_url
 
-historical_taxcode_agent = Agent(
-    role = "Research specialist in sales tax.",
-    goal = "For a given merchant or company name get all the historical tax codes.",
-    backstory = "With experience in natural language processing and sales tax, quickly access highly accurate, state-specific taxability rules and rates as well as cross-border trade content — eliminating manual research across multiple sources.",
-    verbose = False,
-    llm=llm
-)
+    llm = LLM(
+        model=model,
+        api_key=key,
+        base_url = alfa_base_url,
+        temperature=0.0
+    )
+    return llm
 
-customer_similarity_taxcode_agent = Agent(
-    role = "Senior research specialist in sales tax",
-    goal = "For a given merchant or company name get all the historical tax codes to a related company name and product description",
-    backstory = "With experience in natural language processing and sales tax, quickly access highly accurate, state-specific taxability rules and rates as well as cross-border trade content — eliminating manual research across multiple sources.",
-    verbose = False,
-    llm=llm
-)
+def agentic_workflow(llm, input_data):
+    # Tools defined
+    from crewai.tools import BaseTool
+    class InternetSearchTool(BaseTool):
+        name: str = "DuckDuckGo Search Tool"
+        description: str = "Search the web for a given query."
 
-# Define tasks
-research_historical = Task(
-    description='Get the input company details lookup for all the existing Avalara tax codes mapped.',
-    expected_output='Return a list of all the tax codes mapped to the company name.',
-    agent=historical_taxcode_agent
-)
+        def _run(self, query: str) -> list:
+            """Search Internet for relevant information based on a query."""
+            ddgs = DDGS()
+            results = ddgs.text(keywords=query, region='wt-wt', safesearch='moderate', max_results=5)
+            return results
 
-research_new = Task(
-    description='If the historical list of tax codes are empty, use the company details {input_data} to further identify the relevant Avalara tax codes.',
-    expected_output='Return a list of all the tax codes similar to the company name and product description',
-    agent=customer_similarity_taxcode_agent,
-    context=[research_historical]
+    internet_search_tool = InternetSearchTool()
 
-)
+    # Setting up the agents
+    research_company_agent = Agent(
+        role = '''you are good and reliable information finder You are a simple company researcher. Your job is to find a company's website and get basic information about what they do.''',
+        goal = 'Get top 5 search results for the company.',
+        backstory = 'With experience in market research and company database you will search and retrieve the information.',
+        verbose=False,
+        cache=True,
+        tools=[internet_search_tool]
+    )
 
-# Assemble a crew with planning enabled
-crew = Crew(
-    agents=[historical_taxcode_agent, customer_similarity_taxcode_agent],
-    tasks=[research_historical, research_new],
-    verbose=True
-    #knowledge_sources=[csv_source]
-)
+    research_company_products_agent = Agent(
+        role = '''You focus only on the essentials: what does this company do and what do they sell or provide? i want just one summary for each company create a simple.''',
+        goal = 'Get top 5 results for the company.',
+        backstory = 'With experience in market research and company and products database you will search and retrieve the information.',
+        verbose=False,
+        cache=True,
+        tools=[internet_search_tool]
+    )
 
-# Execute tasks
+    research_company_summarizer_agent = Agent(
+        role = '''You will focus on getting the best and common company URLs and description and summarize them.''',
+        goal = 'Get the company name its URL and description.',
+        backstory = 'With experience in market research and company and products database you will search and retrieve the information.',
+        verbose=False,
+        cache=True,
+        llm=llm,
+    )
 
-crew.kickoff()
+    
+    # Define tasks
 
-# Accessing the task output
-task_output = research_new.output
+    research_company = Task(
+        description = '''Get all search results for {company_name} in {jurisdiction}. When given a company name, you:
+                            1. Search for the company's official website
+                            2. Find their main business description
+                            3. Identify what products or services they offer''',
+        expected_output = 'Return a JSON dictionary of web links, description, products services offered, and company details.',
+        agent = research_company_agent,
+        tools=[internet_search_tool]
+    )
 
-print(f"Task Description: {task_output.description}")
-print(f"Task Summary: {task_output.summary}")
-print(f"Raw Output: {task_output.raw}")
-if task_output.json_dict:
-    print(f"JSON Output: {json.dumps(task_output.json_dict, indent=2)}")
-if task_output.pydantic:
-    print(f"Pydantic Output: {task_output.pydantic}")
+    research_company_products = Task(
+        description='''Get the input company {company_name} and {products} in {jurisdiction} with focus only on the essentials: what does this company do and what do they sell or provide? i want just one summary for each company create a simple.''',
+        expected_output='Get the dictionary of the search results with web links, description, products services offered, and company details', 
+        agent=research_company_products_agent,
+        tools=[internet_search_tool]
+    )
+
+    research_company_summarizer = Task(
+        description='You will focus on getting the best and common company URLs and description and summarize them.',
+        expected_output='Return a single dictionary with the company name, description, URL, products services offered. Desscription should not have the company name mentioned.',
+        agent=research_company_summarizer_agent,
+        context=[research_company, research_company_products]
+    )
+
+    # Assemble a crew with planning enabled
+    crew = Crew(
+        agents=[research_company_agent, research_company_products_agent, research_company_summarizer_agent],
+        tasks=[research_company, research_company_products, research_company_summarizer],
+        verbose=True,
+        memory=True
+    )
+
+    # Execute tasks
+    crew.kickoff(inputs=input_data)
+
+    # Accessing the task output
+    task_output = research_company_summarizer.output
+
+    return task_output
+
+def retrieve_output(task_output):    
+    print(f"Task Description: {task_output.description}")
+    print(f"Task Summary: {task_output.summary}")
+    print(f"Raw Output: {task_output.raw}")
+    output = task_output.raw
+    if task_output.raw.find('```python')>-1:
+        output = task_output.raw[task_output.raw.find('```python'):]
+        output = output.replace('```python','').replace('```','').strip()
+    else:
+        output = task_output.raw[task_output.raw.find('```json'):]
+        output = output.replace('```json','').replace('```','').strip()
+    print(output)
+    try:
+        import ast
+        output = ast.literal_eval(output)
+    except:
+        print("error parsing output dictionary")
+    return task_output.description, task_output.summary, output
+    
+################
+
+def main():
+    # Get input data
+    company_name_DF,products_DF = load_data()
+
+    # Prepare the LLM
+    model = 'gpt-4o'
+    llm = load_llm(model)
+
+    output_arr = []
+    count = 0
+    for company_name in company_name_DF['company_name'].values:
+        count = count + 1
+        if count>53:
+            output_dict = {}
+            products_filter_DF = products_DF[products_DF.company_name==company_name]
+            input_data = {
+                'company_name':company_name,
+                'products' : list(products_filter_DF['title'].values),
+                'jurisdiction' : 'USA'
+            }
+            task_output = agentic_workflow(llm,input_data)
+            description,summary,output = retrieve_output(task_output)
+            print('---------------------------------')
+            print('Description: ', description)
+            print('---------------------------------')
+            print('Summary: ', summary)
+            print('---------------------------------')
+            print('Output: ', output)
+
+            output_dict['company_name'] = company_name
+            output_dict['output'] = output
+            output_dict['desciption'] = description
+            output_dict['summary'] = summary
+            output_arr.append(pd.Series(output_dict))
+            output_DF = pd.DataFrame(output_arr)
+            output_DF.to_csv('company_description.csv')
+
+if __name__ == '__main__':
+    main()
