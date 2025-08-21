@@ -8,26 +8,20 @@ from duckduckgo_search import DDGS
 
 def load_data():
     company_names_DF = pd.read_excel('/Users/anand.srinivasan/Downloads/company_driven_modeling/company.xlsx')
-    mm_DF = pd.read_csv('/Users/anand.srinivasan/Downloads/company_driven_modeling/model_mm_intput.csv')
-    mm_DF = mm_DF.reset_index()
-    ims_DF = pd.read_csv('/Users/anand.srinivasan/Downloads/company_driven_modeling/ims_model_input_data.csv')
-    products_DF = pd.concat([mm_DF,ims_DF],axis=0)
+    product_DF = pd.read_excel('/Users/anand.srinivasan/Downloads/company_driven_modeling/products.xlsx')
     return company_names_DF,products_DF
 
 def load_llm(model):
-    # Setup of the ALFA client parameters
-    alfa_claim = "1a7f2329-7fb8-45a8-9c8b-d821b50c5888"
-    alfa_env = "qa"
-    alfa_base_url = f"https://alfa.gamma.{alfa_env}.us-west-2.aws.avalara.io"
-    key = f"sk-{alfa_claim}"  
-
+    key = 
+    base_url = 
+    
     os.environ["OPENAI_API_KEY"] = key
-    os.environ["OPENAI_BASE_URL"] = alfa_base_url
+    os.environ["OPENAI_BASE_URL"] = base_url
 
     llm = LLM(
         model=model,
         api_key=key,
-        base_url = alfa_base_url,
+        base_url = base_url,
         temperature=0.0
     )
     return llm
